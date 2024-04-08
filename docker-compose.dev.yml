@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  nginx:
+    image: nginx:latest
+    volumes:
+      - ./uploads:/usr/src/app/uploads
+      - ./docker/nginx:/etc/nginx/conf.d
+      - ./packages/client/public:/usr/src/app/public
+    networks:
+      - global-network
+    labels:
+      traefik.enable: true
+      traefik.http.services.nginx.loadbalancer.server.port: 80
+
+      traefik.http.routers.nginx.entrypoints: web
+      traefik.http.routers.nginx.rule: "PathPrefix(`/public`) || PathPrefix(`/uploads`)"
+
+  traefik:
+    image: traefik:latest
+    networks:
+      - global-network
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedByDefault=false"
+      - "--entryPoints.web.address=:3000"
+    volumes:
+      - $XDG_RUNTIME_DIR/docker.sock:/var/run/docker.sock
+    ports:
+      - "3000:3000"
+      - "8080:8080"
+
+networks:
+  global-network:
+    name: global-network
+    external: true

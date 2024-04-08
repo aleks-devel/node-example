@@ -1,0 +1,145 @@
+stages:
+  - .pre
+  - .post
+  - deploy
+  - review
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+    - when: always
+
+variables:
+  PROJECT_HOST: NDA.com
+
+pre-job:
+  stage: .pre
+  script:
+    - docker network create -d overlay --attachable global-network || true
+
+post-job:
+  stage: .post
+  script:
+    - docker system prune -f
+
+deploy-shared-job:
+  stage: deploy
+  variables:
+    TRAEFIK_URL: traefik.$PROJECT_HOST
+    NGINX_URL: static.$PROJECT_HOST
+    ENVIRONMENT: staging
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      variables:
+        ENVIRONMENT: production
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "push"
+      changes:
+        - docker-compose.prod.yml
+      when: on_success
+  script:
+    - docker compose -f ./docker-compose.prod.yml build --push
+    - docker stack deploy --with-registry-auth -c ./docker-compose.prod.yml shared_deps
+  environment:
+    name: $ENVIRONMENT/shared
+    url: https://$PROJECT_HOST
+
+deploy-server-job:
+  stage: deploy
+  variables:
+    SERVER_HOST: develop.$PROJECT_HOST
+    MODULE_DIR: packages/server
+    APP_ENV: staging
+    NODE_ENV: production
+    ENVIRONMENT: staging
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      variables:
+        SERVER_HOST: $PROJECT_HOST
+        ENVIRONMENT: production
+        APP_ENV: production
+      when: manual
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "develop"
+      changes:
+        - $MODULE_DIR/**/*
+      when: on_success
+  script:
+    - set -a && . .env && set +a
+    - docker compose -f ./$MODULE_DIR/docker-compose.prod.yml build --push
+    - docker stack deploy --with-registry-auth -c ./$MODULE_DIR/docker-compose.prod.yml $ENVIRONMENT-server
+  environment:
+    name: $ENVIRONMENT/server
+    url: https://$SERVER_HOST
+
+review-client-job:
+  stage: review
+  variables:
+    CLIENT_NAME_PREFIX: $CI_COMMIT_REF_SLUG
+    CLIENT_URL: $CI_COMMIT_REF_SLUG.$PROJECT_HOST
+    SERVER_HOST: develop.$PROJECT_HOST
+    MODULE_DIR: packages/client
+    APP_ENV: staging
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "push"
+      changes:
+        - $MODULE_DIR/**/*
+      when: on_success
+  script:
+    - set -a && . .env && set +a
+    - docker compose -f ./$MODULE_DIR/docker-compose.prod.yml build --push
+    - docker stack deploy --with-registry-auth -c ./$MODULE_DIR/docker-compose.prod.yml $CI_COMMIT_REF_SLUG-client
+  environment:
+    name: review/$CI_COMMIT_REF_SLUG
+    url: https://$CLIENT_URL
+    on_stop: stop-client-review-environment
+
+stop-client-review-environment:
+  stage: review
+  variables:
+    GIT_STRATEGY: none
+  script: docker stack rm $CI_COMMIT_REF_SLUG-client
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "push"
+      changes:
+        - $MODULE_DIR/**/*
+      when: on_success
+  environment:
+    name: review/$CI_COMMIT_REF_SLUG
+    action: stop
+
+deploy-client-job:
+  stage: deploy
+  variables:
+    CLIENT_NAME_PREFIX: ""
+    CLIENT_URL: $PROJECT_HOST
+    SERVER_HOST: $PROJECT_HOST
+    MODULE_DIR: packages/client
+    APP_ENV: production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+    - when: never
+  script:
+    - set -a && . .env && set +a
+    - docker compose -f ./$MODULE_DIR/docker-compose.prod.yml build --push
+    - docker stack deploy --with-registry-auth -c ./$MODULE_DIR/docker-compose.prod.yml production-client
+  environment:
+    name: production/client
+    url: https://$PROJECT_HOST

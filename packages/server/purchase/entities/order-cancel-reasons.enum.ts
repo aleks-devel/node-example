@@ -1,0 +1,3 @@
+export enum OrderCancelReasons {
+  paymentCancel
+}

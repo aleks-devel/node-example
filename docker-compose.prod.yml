@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:latest
+    volumes:
+      - ./docker/nginx:/etc/nginx/conf.d
+      - ./packages/client/public:/usr/src/app/public
+      - uploads:/usr/src/app/uploads
+    networks:
+      - global-network
+    deploy:
+      labels:
+        traefik.enable: "true"
+        traefik.http.services.nginx.loadbalancer.server.port: 80
+
+        traefik.http.routers.nginx.tls.certresolver: mainresolver
+        traefik.http.routers.nginx.entrypoints: websecure
+        traefik.http.routers.nginx.rule: "Host(`${NGINX_URL}`) && (PathPrefix(`/public`) || PathPrefix(`/uploads`))"
+
+        traefik.http.routers.httpnginx.entrypoints: web
+        traefik.http.routers.httpnginx.rule: "Host(`${NGINX_URL}`) && (PathPrefix(`/public`) || PathPrefix(`/uploads`))"
+
+  traefik:
+    image: traefik:v3.0
+    networks:
+      - global-network
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+      - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
+      - "--providers.swarm.exposedByDefault=false"
+      - "--entryPoints.web.address=:80"
+      - "--entryPoints.websecure.address=:443"
+      - "--certificatesresolvers.mainresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.mainresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.mainresolver.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.mainresolver.acme.httpChallenge.entryPoint=web"
+      - "--providers.swarm.network=NDA"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - letsencrypt:/letsencrypt
+    ports:
+      - "80:80"
+      - "443:443"
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.services.dashboard.loadbalancer.server.port=80"
+        - "traefik.http.routers.dashboard.service=api@internal"
+        - "traefik.http.middlewares.dashboard-auth.basicauth.users=manager:$$2y$$05$$hZ1SyNwFyZgk1nIcjvNEouzQNjEsxVd5ZbzoAxkVSMGNvpxFR3CvC"
+
+        - "traefik.http.routers.dashboard.tls.certresolver=mainresolver"
+        - "traefik.http.routers.dashboard.entrypoints=websecure"
+        - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_URL}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+        - "traefik.http.routers.dashboard.middlewares=dashboard-auth"
+
+        - "traefik.http.routers.httpdashboard.entrypoints=web"
+        - "traefik.http.routers.httpdashboard.rule=Host(`${TRAEFIK_URL}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+        - "traefik.http.middlewares.dashboard-redirectscheme.redirectscheme.scheme=https"
+        - "traefik.http.middlewares.dashboard-redirectscheme.redirectscheme.permanent=true"
+        - "traefik.http.routers.httpdashboard.middlewares=dashboard-redirectscheme,dashboard-auth"
+      placement:
+        constraints:
+          - node.role == manager
+
+volumes:
+  uploads:
+    name: uploads
+    external: true
+  letsencrypt:
+    name: letsencrypt
+    external: true
+
+networks:
+  global-network:
+    name: global-network
+    external: true

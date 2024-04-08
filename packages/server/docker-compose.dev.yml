@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  phpmyadmin:
+    depends_on:
+      - mysqldb
+    image: phpmyadmin/phpmyadmin
+    environment:
+      PMA_HOST: mysqldb
+      PMA_PORT: ${DB_PORT}
+    restart: always
+    ports:
+      - "8081:80"
+    networks:
+      - global-network
+
+  mysqldb:
+    image: mysql
+    tty: true
+    command: mysqld --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_BOT_DATABASE: ${DB_BOT_DATABASE}
+      DB_BOT_USERNAME: ${DB_BOT_USERNAME}
+      DB_BOT_PASSWORD: ${DB_BOT_PASSWORD}
+    ports:
+      - "3306:${DB_PORT}"
+    networks:
+      - global-network
+    volumes:
+      - db:/var/lib/mysql
+      - ../../docker/mysql:/docker-entrypoint-initdb.d
+    env_file:
+      - ../../.env
+
+  app-server:
+    depends_on:
+      - mysqldb
+    build:
+      context: ./
+      dockerfile: DockerFile
+      target: development
+    environment:
+      NODE_ENV: development
+      APP_ENV: development
+      DB_HOST: mysqldb
+      DB_BOT_HOST: mysqldb
+      PROJECT_HOST: 127.0.0.1:3000
+      STATIC_HOST: 127.0.0.1:3000
+    volumes:
+      - ./:/usr/src/app
+      - ../../uploads:/usr/src/uploads
+    env_file:
+      - ../../.env
+    networks:
+      - global-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "100k"
+        max-file: "5"
+    ports:
+      - "9229:9229"
+    labels:
+      traefik.enable: true
+      traefik.http.services.app-server.loadbalancer.server.port: 3001
+      traefik.http.routers.app-server.entrypoints: web
+      traefik.http.routers.app-server.rule: "PathPrefix(`/api`) || PathPrefix(`/graphql`) || PathPrefix(`/socket.io`)"
+
+volumes:
+  db:
+    driver: local
+
+networks:
+  global-network:
+    name: global-network
+    external: true
